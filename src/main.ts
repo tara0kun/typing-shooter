@@ -6,8 +6,8 @@ import {
 import { muted, play, toggleMute, unlock } from './sound.ts';
 import {
   ATTACK_TIME, FALL_TIME, FIELD_W, LETTER_W, MAGAZINE, MAX_HP, PLAYER_X, PRACTICE_WORDS, RELOAD_TIME, WAVES,
-  accuracy, difficulty, grade, guide, labelText, labelWidth, level, multiplier, newGame, target, typeKey, update, weakKeys, wpm,
-  type Game, type KeyStats, type Kind, type Lang, type Mode, type Spelling, type Zombie,
+  CATEGORIES, accuracy, difficulty, grade, guide, hurtOf, labelText, labelWidth, level, multiplier, newGame, passages, target, typeKey, update,
+  weakKeys, wpm, type Category, type Game, type KeyStats, type Kind, type Lang, type Mode, type Spelling, type Zombie,
 } from './game.ts';
 
 const W = FIELD_W;
@@ -20,6 +20,7 @@ const TITLE = 'ナイトタイピスト'; // provisional name, the real one is n
 const MONO = 'Consolas, "Courier New", monospace';
 const SANS = '"Yu Gothic UI", Meiryo, sans-serif';
 const LAST_START = 20;
+const BAND_Y = 58; // the boss's band: its heading under the HUD's rounds, which a long line's band would otherwise reach
 
 const canvas = document.querySelector<HTMLCanvasElement>('#screen')!;
 canvas.width = W;
@@ -35,12 +36,27 @@ const LOOKS: Record<Kind, { frames: HTMLCanvasElement[]; bodyX: number; scale: n
   brute: { frames: BRUTE_WALK, bodyX: BRUTE_BODY_X, scale: 1, stride: 8 },
   boss: { frames: BOSS_WALK, bodyX: BRUTE_BODY_X, scale: 2, stride: 12 },
 };
-const height = (z: Zombie) => LOOKS[z.kind].frames[0].height * LOOKS[z.kind].scale;
+const GIANT = { ...LOOKS.boss, scale: 3, stride: 18 }; // the passage mode's boss
+const lookOf = (z: Zombie) => (z.kind === 'boss' && game.mode === 'passage' ? GIANT : LOOKS[z.kind]);
+const height = (z: Zombie) => lookOf(z).frames[0].height * lookOf(z).scale;
+
+/** The categories' names on the title, and what each holds in either language. */
+const CATEGORY_NAMES: Record<Category, string> = {
+  night: '夜の言葉', everyday: '身近な言葉', classic: '昔からの言葉', places: '地名', symbols: '数字・記号・コード',
+};
+const CATEGORY_NOTES: Record<Category, Record<Lang, string>> = {
+  night: { en: '夜の街と暮らしの英単語', ja: '夜の街と暮らしの言葉' },
+  everyday: { en: '家・学校・食べ物などの英単語', ja: '家・学校・食べ物など' },
+  classic: { en: '英語のことわざ（スペースも打つ）', ja: 'ことわざ・四字熟語・早口言葉' },
+  places: { en: '国と首都（英語で）', ja: '都道府県・県庁所在地・国・世界の都市' },
+  symbols: { en: '数字・記号・プログラムの 1 行（英語・日本語で同じ）', ja: '数字・記号・プログラムの 1 行（英語・日本語で同じ）' },
+};
 
 let screen: 'title' | 'play' | 'result' = 'title';
 let choice = 0; // the title menu's chosen line
 let startMission = 1; // chosen on the title with the arrow keys, so a fast typist need not sit through the slow missions
 let lang: Lang = 'en';
+let category: Category = 'night';
 export let game: Game = newGame(); // exported only so a script driving the page in a browser can read the state (kept outside the repo)
 let paused = false;
 let resultAt = 0; // when the results came up (performance.now)
@@ -49,16 +65,21 @@ let missAt = -1;
 let hurtAt = -1;
 let imeAt = -Infinity; // when a key last came through an IME (performance.now)
 const history: KeyStats = {}; // tries and misses per key over this page's games: the practice picks words by it (nothing is saved)
-const best: Partial<Record<Lang, number>> = {}; // the score attack's best on this page, per language
+const best: Record<string, number> = {}; // the score attack's best on this page, per language and category (bestKey)
 const spell: Spelling = {}; // how the player types the kana the guide spells another way, while the page is open
 /** Exported only so a script driving the page in a browser can read the screens' state (kept outside the repo). */
-export const ui = () => ({ screen, choice, startMission, lang, paused, best: { ...best } });
+export const ui = () => ({ screen, choice, startMission, lang, category, paused, best: { ...best } });
+/** The language a game of the chosen words plays in: digits and code are the same in both, and play as the English game. */
+const playLang = (): Lang => (category === 'symbols' ? 'en' : lang);
+const bestKey = (l: Lang, c: Category) => `${l}:${c}`;
 
+const goal = (l = playLang()) => `目安 ${speed(difficulty(startMission * WAVES, l).wpm, l)}`;
 const MENU: { mode: Mode; text: () => string }[] = [
-  { mode: 'mission', text: () => `ミッション ${startMission} から（目安 ${speed(difficulty(startMission * WAVES, lang).wpm, lang)}）　← → で選ぶ` },
+  { mode: 'mission', text: () => `ミッション ${startMission} から（${goal()}）　← → で選ぶ` },
   { mode: 'endless', text: () => '終わりの無い夜（5 ウェーブごとにボス）' },
-  { mode: 'attack', text: () => `スコアアタック（${ATTACK_TIME} 秒）${best[lang] ? `　このページの最高 ${best[lang]}` : ''}` },
+  { mode: 'attack', text: () => `スコアアタック（${ATTACK_TIME} 秒）${best[bestKey(playLang(), category)] ? `　このページの最高 ${best[bestKey(playLang(), category)]}` : ''}` },
   { mode: 'practice', text: () => `練習（苦手な字が多く出る・体力は減らない・${PRACTICE_WORDS} 語）` },
+  { mode: 'passage', text: () => `長文ボス（強さ ${startMission}・${goal(lang)}）　← → で選ぶ` }, // its text is in the language chosen, whatever the category
 ];
 /**
  * A typing speed as players of each language know it: WPM (5 keys a word) for English; keys a second for Japanese,
@@ -68,7 +89,7 @@ const MENU: { mode: Mode; text: () => string }[] = [
 const speed = (wordsPerMinute: number, l: Lang) => (l === 'ja' ? `1 秒に ${(wordsPerMinute / 12).toFixed(1)} 打` : `${Math.round(wordsPerMinute)} WPM`);
 
 function start(mode: Mode, mission: number) {
-  game = newGame(mode, mission, lang, history, spell);
+  game = newGame(mode, mission, lang, history, spell, category);
   paused = false;
   shot = { at: -1, x: 0, id: 0, hit: false };
   missAt = -1;
@@ -83,7 +104,8 @@ function leave(to: 'title' | 'result') {
     h.tries += s.tries;
     h.misses += s.misses;
   }
-  if (to === 'result' && game.mode === 'attack') best[game.lang] = Math.max(best[game.lang] ?? 0, game.score);
+  const key = bestKey(game.lang, game.category);
+  if (to === 'result' && game.mode === 'attack') best[key] = Math.max(best[key] ?? 0, game.score);
   screen = to;
 }
 
@@ -101,7 +123,7 @@ addEventListener('keydown', (e) => {
     if (e.key === 'ArrowUp') choice = (choice + MENU.length - 1) % MENU.length;
     if (e.key === 'ArrowDown') choice = (choice + 1) % MENU.length;
     const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-    if (MENU[choice].mode === 'mission') startMission = Math.min(LAST_START, Math.max(1, startMission + step));
+    if (MENU[choice].mode === 'mission' || MENU[choice].mode === 'passage') startMission = Math.min(LAST_START, Math.max(1, startMission + step));
     return;
   }
   if (e.repeat) return;
@@ -112,6 +134,7 @@ addEventListener('keydown', (e) => {
   if (screen === 'title') {
     if (e.key === 'Enter' || e.key === ' ') start(MENU[choice].mode, startMission);
     if (ch === 'l') lang = lang === 'en' ? 'ja' : 'en';
+    if (ch === 'c') category = CATEGORIES[(CATEGORIES.indexOf(category) + 1) % CATEGORIES.length];
     if (ch === 'm') toggleMute();
   } else if (screen === 'result') {
     if (performance.now() - resultAt < 500) return; // a key pressed as the fight ended (Esc meant as pause) must not skip the results
@@ -123,8 +146,8 @@ addEventListener('keydown', (e) => {
     if (e.key === 'Escape') paused = !paused;
     else if (paused && ch === 'm') toggleMute();
     else if (paused && e.key === 'Enter') leave('title');
-    else if (!paused && ch && ch !== ' ' && !kana) {
-      // any character is a shot, so a digit or a mark is a miss too; Space is let off (a habit from typing tests)
+    else if (!paused && ch && !kana) {
+      // any character is a shot, so a digit or a mark is a miss too; Space only where the text has one (typeKey)
       const t = target(game);
       const step = t ? guide(t, game.spell).done.length : 0; // keys of its word typed before this one: each key a step higher
       const r = typeKey(game, ch);
@@ -171,9 +194,10 @@ function draw() {
 }
 
 function drawField() {
-  drawPlayer();
   for (const z of game.zombies) drawZombie(z);
-  ctx.drawImage(BARRICADE, PLAYER_X - 8, GROUND_Y - BARRICADE.height); // after the zombies: one that reaches it stands behind it
+  // the survivor and the barricade after the zombies: one that reaches it stands behind them (a big one's front foot too)
+  drawPlayer();
+  ctx.drawImage(BARRICADE, PLAYER_X - 8, GROUND_Y - BARRICADE.height);
   if (screen !== 'result') {
     drawLabels(); // under the results they only clutter the text
     drawBossLine();
@@ -200,12 +224,15 @@ function drawField() {
  * first boss of the game. Under the banner in the break, then a while at the foot of the screen, and in the pause.
  */
 function newKinds(): string[] {
+  if (game.mode === 'passage') return ['長文ボス: 上の帯の文を前から打つ。1 打ごとに押し戻す。柵に着くと体力 −3'];
   if (game.mode !== 'mission' && game.mode !== 'endless') return [];
-  const now = difficulty(level(game), game.lang);
-  const before = game.wave > 1 ? difficulty(level({ ...game, wave: game.wave - 1 }), game.lang) : { runner: 0, brute: 0 };
+  const now = difficulty(level(game), game.lang, game.category);
+  const before = game.wave > 1 ? difficulty(level({ ...game, wave: game.wave - 1 }), game.lang, game.category) : { runner: 0, brute: 0 };
   const notes: string[] = [];
-  if (now.runner > 0 && before.runner === 0) notes.push('走るゾンビが出る: 足が速く、言葉は短い');
-  if (now.brute > 0 && before.brute === 0) notes.push('大柄なゾンビが出る: 言葉が 2 つ。柵に着くと体力 −2');
+  const hurt = hurtOf(game, 'walker'); // 1, or more in a category of long words
+  if (game.wave === 1 && hurt > 1) notes.push(`言葉が長いお題: ゾンビは少ないが、柵に着くと体力 −${hurt}`);
+  if (now.runner > 0 && before.runner === 0) notes.push(`走るゾンビが出る: 足が速く、言葉は短い${hurt > 1 ? `。柵に着くと体力 −${hurtOf(game, 'runner')}` : ''}`);
+  if (now.brute > 0 && before.brute === 0) notes.push(`大柄なゾンビが出る: 言葉が 2 つ。柵に着くと体力 −${hurtOf(game, 'brute')}`);
   if (game.boss && game.bosses === 0) notes.push('ボス: 上の帯の文を区切りごとに打つ。打つたびに押し戻す。柵に着くと体力 −3');
   return notes;
 }
@@ -227,12 +254,13 @@ function stage() {
   if (game.mode === 'mission') return `ミッション ${game.mission}　${game.boss ? 'ボス' : `ウェーブ ${game.wave}/${WAVES}`}`;
   if (game.mode === 'endless') return `ウェーブ ${game.wave}${game.boss ? '　ボス' : ''}`;
   if (game.mode === 'attack') return `残り ${Math.min(ATTACK_TIME, Math.max(0, Math.ceil(ATTACK_TIME - (game.time - game.waveStart))))} 秒`;
-  return '練習';
+  return game.mode === 'passage' ? `長文ボス　強さ ${game.mission}` : '練習';
 }
 
 function banner() {
   if (game.mode === 'attack') return `スコアアタック　${ATTACK_TIME} 秒`;
   if (game.mode === 'practice') return `練習　${PRACTICE_WORDS} 語`;
+  if (game.mode === 'passage') return '長文ボスが来る';
   return game.boss ? `${stage()}が来る` : stage();
 }
 
@@ -243,7 +271,7 @@ function drawPlayer() {
 }
 
 function drawZombie(z: Zombie) {
-  const look = LOOKS[z.kind];
+  const look = lookOf(z);
   const [w, h] = [look.frames[0].width * look.scale, look.frames[0].height * look.scale];
   const left = Math.round((z.x - look.bodyX * look.scale) / PX) * PX; // on the art pixel grid, like the street
   if (z.diedAt === null) {
@@ -255,14 +283,16 @@ function drawZombie(z: Zombie) {
     ctx.drawImage(frame, left + flinch, GROUND_Y - h, w, h);
     return;
   }
-  // the fall: knocked back, then over backwards (away from the player) in three steps, then it fades on the ground
+  // the fall: knocked back, then over backwards (away from the player) in three steps, then it fades on the ground; one too
+  // near the right edge to lie down behind itself (a boss, the giant) falls forwards instead, so the fall stays on screen
   const t = game.time - z.diedAt;
   const step = Math.min(3, Math.floor(t / 0.1));
+  const back = left + w + h <= W;
   ctx.save();
-  ctx.translate(left + w, GROUND_Y); // turns on its back foot
-  ctx.rotate((step * Math.PI) / 6);
+  ctx.translate(back ? left + w : left, GROUND_Y); // turns on its back foot, or its front one
+  ctx.rotate(((back ? 1 : -1) * step * Math.PI) / 6);
   ctx.globalAlpha = Math.max(0, Math.min(1, (FALL_TIME - t) / 0.3));
-  ctx.drawImage(look.frames[0], -w + (step === 0 ? PX : 0), -h, w, h);
+  ctx.drawImage(look.frames[0], (back ? -w : 0) + (step === 0 ? PX : 0), -h, w, h);
   ctx.restore();
 }
 
@@ -360,11 +390,12 @@ function drawParts(z: Zombie, left: number, top: number) {
 function drawBossLine() {
   const boss = game.zombies.find((z) => z.kind === 'boss' && z.diedAt === null);
   if (!boss) return;
+  if (game.mode === 'passage') return drawPassage(boss);
   const isTarget = target(game) === boss;
   const ja = game.lang === 'ja';
   const w = Math.max(labelWidth(boss, game.spell), 120);
   const x = Math.round(W / 2 - w / 2);
-  const y = 48;
+  const y = BAND_Y;
   ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
   ctx.fillRect(x - 8, y - 6, w + 16, ja ? 40 : 26);
   ctx.strokeStyle = isTarget ? '#fd3' : '#a83232';
@@ -398,6 +429,51 @@ function drawBossLine() {
       }
       px += (p.show.length + 1) * LETTER_W;
     });
+  }
+}
+
+/**
+ * The giant's passage, too long for one line: from the part being typed (its keys under it, or in place for English) on to
+ * as many next parts as fit, with the title and a bar of the parts done above.
+ */
+function drawPassage(boss: Zombie) {
+  const isTarget = target(game) === boss;
+  const ja = game.lang === 'ja';
+  const [left, right, y] = [24, W - 24, BAND_Y];
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(left - 8, y - 6, right - left + 16, ja ? 40 : 26);
+  ctx.strokeStyle = isTarget ? '#fd3' : '#a83232';
+  ctx.strokeRect(left - 7.5, y - 5.5, right - left + 15, ja ? 39 : 25);
+  ctx.textBaseline = 'top';
+  ctx.font = `12px ${SANS}`; // not bold: the titles' kanji have many strokes (蜘蛛, 龍)
+  ctx.fillStyle = '#e66';
+  ctx.fillText(`長文ボス　${passages(game.lang)[game.passage].title}`, left - 6, y - 19);
+  const bar = 120;
+  ctx.fillStyle = '#ddd';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${boss.part}/${boss.prompts.length}`, right - bar - 6, y - 19);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ddd';
+  ctx.fillRect(right - bar, y - 15, bar, 6);
+  ctx.fillStyle = '#2f4f2f'; // the parts done: darker, not only another colour
+  ctx.fillRect(right - bar, y - 15, (bar * boss.part) / boss.prompts.length, 6);
+  const keys = guide(boss, game.spell);
+  let px = left;
+  if (ja) {
+    ctx.font = `12px ${SANS}`;
+    drawKeys(keys.done, keys.rest, isTarget, left, y + 16);
+  } else {
+    drawKeys(keys.done, keys.rest, isTarget, left, y);
+    px += (keys.done.length + keys.rest.length + 1) * LETTER_W;
+  }
+  ctx.font = ja ? `12px ${SANS}` : `12px ${MONO}`;
+  for (let i = ja ? boss.part : boss.part + 1; i < boss.prompts.length; i++) {
+    const text = boss.prompts[i].show;
+    const w = ctx.measureText(text).width;
+    if (px + w > right) break;
+    ctx.fillStyle = i === boss.part ? '#fd3' : '#999'; // the parts after the one being typed dimmer, so its end shows
+    ctx.fillText(text, px, y);
+    px += w + (ja ? 0 : LETTER_W);
   }
 }
 
@@ -435,15 +511,16 @@ function drawHud() {
 
 function drawTitle() {
   shade(0.5);
-  center(`bold 40px ${SANS}`, '#e8e2c8', TITLE, 30);
+  center(`bold 40px ${SANS}`, '#e8e2c8', TITLE, 22);
   MENU.forEach((item, i) => {
     const on = i === choice;
-    center(`${on ? 'bold ' : ''}15px ${SANS}`, on ? '#fd3' : '#bbb', `${on ? '▶ ' : ''}${item.text()}`, 98 + i * 24);
+    center(`${on ? 'bold ' : ''}15px ${SANS}`, on ? '#fd3' : '#bbb', `${on ? '▶ ' : ''}${item.text()}`, 82 + i * 22);
   });
   center(`14px ${SANS}`, '#fd3', `L　言葉: ${lang === 'en' ? '英語' : '日本語（ローマ字で打つ）'}　　${soundLine()}`, 202);
-  center(`13px ${SANS}`, '#bbb', '↑ ↓ で選んで Enter。ゾンビの頭の上の言葉を打って倒す（1 文字 = 1 発・30 発ごとに 2 秒のリロード）', 232);
-  center(`13px ${SANS}`, '#bbb', '左の柵まで来られると体力が減る。0 でゲームオーバー。Esc で一時停止', 254);
-  center(`12px ${SANS}`, '#999', '※ キーボードが必要です（半角英字で打ってください）', 280);
+  center(`14px ${SANS}`, '#fd3', `C　お題: ${CATEGORY_NAMES[category]}（${CATEGORY_NOTES[category][lang]}）`, 224);
+  center(`13px ${SANS}`, '#bbb', '↑ ↓ で選んで Enter。ゾンビの頭の上の言葉を打って倒す（1 文字 = 1 発・30 発ごとに 2 秒のリロード）', 256);
+  center(`13px ${SANS}`, '#bbb', '左の柵まで来られると体力が減る。0 でゲームオーバー。Esc で一時停止', 276);
+  center(`12px ${SANS}`, '#999', '※ キーボードが必要です（半角英字で打ってください）', 300);
 }
 
 const soundLine = () => `M　音 ${muted ? 'オフ' : 'オン'}`;
@@ -478,14 +555,23 @@ function drawResult() {
   } else if (game.mode === 'endless') {
     center(`bold 30px ${SANS}`, '#e33', 'ゲームオーバー', 36);
     center(`bold 20px ${SANS}`, '#e8e2c8', `ウェーブ ${game.wave} まで生き延びた（ボスを ${game.bosses} 体）`, 100);
+  } else if (game.mode === 'passage') {
+    const r = grade(game);
+    const p = passages(game.lang)[game.passage];
+    const giant = game.zombies.find((z) => z.kind === 'boss' && z.diedAt === null); // still standing if the game was lost
+    center(`bold 30px ${SANS}`, game.cleared ? '#e8e2c8' : '#e33', game.cleared ? '長文ボスを倒した' : 'ゲームオーバー', 26);
+    center(`bold 36px ${SANS}`, '#fd3', `評価 ${r.grade}`, 70);
+    center(`13px ${SANS}`, '#fd3', r.next, 118);
+    if (p) center(`13px ${SANS}`, '#ddd', `${p.title}　${giant ? giant.part : p.parts.length}/${p.parts.length} 区切り`, 140);
   } else if (game.mode === 'attack') {
+    const top = best[bestKey(game.lang, game.category)] ?? 0;
     center(`bold 30px ${SANS}`, game.cleared ? '#e8e2c8' : '#e33', game.cleared ? 'タイムアップ' : 'ゲームオーバー', 26);
     center(`bold 30px ${SANS}`, '#fd3', `スコア ${game.score}`, 74);
-    center(`13px ${SANS}`, '#fd3', game.score >= (best[lang] ?? 0) ? 'このページの最高' : `このページの最高 ${best[lang]}`, 124);
+    center(`13px ${SANS}`, '#fd3', game.score >= top ? 'このページの最高' : `このページの最高 ${top}`, 124);
   } else {
     center(`bold 30px ${SANS}`, '#e8e2c8', '練習おわり', 26);
     const weak = weakKeys(game.keyStats); // this run's
-    center(`15px ${SANS}`, '#fd3', weak.length ? `苦手な字: ${weak.map((k) => `${k.key}（${k.tries} 回中 ${k.misses} 回ミス）`).join('　')}` : '苦手な字は見つからなかった', 90);
+    center(`15px ${SANS}`, '#fd3', weak.length ? `苦手な字: ${weak.map((k) => `${k.key === ' ' ? 'スペース' : k.key}（${k.tries} 回中 ${k.misses} 回ミス）`).join('　')}` : '苦手な字は見つからなかった', 90);
   }
   center(`15px ${SANS}`, '#ddd', `倒した数 ${game.kills}　命中率 ${accuracy(game).toFixed(1)}%　速さ ${speed(wpm(game), game.lang)}`, 172);
   center(`15px ${SANS}`, '#ddd', `最大コンボ ${game.maxCombo}　スコア ${game.score}`, 198);

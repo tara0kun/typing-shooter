@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ATTACK_TIME, BOSS_BOUNCE, BOSS_EVERY, BOSS_PUSH, FALL_TIME, FIELD_W, KINDS, MAGAZINE, MAX_HP, PLAYER_X, PRACTICE_WORDS,
-  RELOAD_TIME, WAVES, WAVE_BREAK, accuracy, difficulty, english, grade, guide, japanese, labelWidth, lines, newGame, pools,
-  readable, spawn, spelled, target, typeKey, update, weakKeys, wpm, type Game,
+  ATTACK_TIME, BASE_SPEED, BOSS_BOUNCE, BOSS_EVERY, BOSS_PUSH, CATEGORIES, FALL_TIME, FIELD_W, GIANT_PACE, KINDS, MAGAZINE, MAX_HP,
+  PLAYER_X, PRACTICE_WORDS, READ_TIME, RELOAD_TIME, WALK_SLACK, WAVES, WAVE_BREAK, accuracy, difficulty, english, grade, guide,
+  hurtOf, japanese, labelWidth, lines, newGame, passages, pools, readable, spawn, spelled, target, typeKey, update, weakKeys, wpm,
+  type Game,
 } from '../src/game.ts';
 import { romajiUnits } from '../src/romaji.ts';
 import { WORDS } from '../src/words.ts';
@@ -319,15 +320,16 @@ test('later waves come faster, walk faster and use longer words; long words from
   const [l1, l4] = [difficulty(1), difficulty(4)];
   assert.ok(l4.interval < l1.interval && l4.speed > l1.speed && l4.short < l1.short && l4.long > l1.long);
   assert.equal(difficulty(3).long, 0); // none in mission 1
-  const first = (mission: number) => {
+  const first = (mission: number, r = 0.99) => {
     const g = newGame('mission', mission);
-    update(g, 1, () => 0.99);
-    update(g, WAVE_BREAK, () => 0.99);
+    update(g, 1, () => r);
+    update(g, WAVE_BREAK, () => r);
     return g.zombies[0];
   };
   assert.ok(WORDS.medium.includes(first(1).word));
   assert.ok(WORDS.long.includes(first(2).word));
-  assert.ok(first(2).speed > first(1).speed);
+  // walkers of words short enough to walk at their level's speed (a long word walks slower, see WALK_SLACK)
+  assert.ok(first(2, 0.5).speed > first(1, 0.5).speed);
 });
 
 test('30 shots empty the magazine; for 2 seconds keys do nothing, then it is full again', () => {
@@ -384,9 +386,10 @@ test('accuracy is correct keys / all keys; WPM is 5 letters a word over the time
 
 test('the WPM clock runs only while there is a readable zombie and rounds to shoot it', () => {
   const g = quiet();
-  const z = spawn(g, 'moon', FIELD_W + 16, 0); // standing just off screen
-  update(g, 5);
-  assert.equal(g.typingTime, 0);
+  // its body on screen, its word not all yet: walking in at BASE_SPEED, it cannot be read for these 0.8 s
+  const z = spawn(g, 'midnight', FIELD_W - 1, 0);
+  for (let i = 0; i < 16; i++) update(g, 0.05);
+  assert.ok(g.typingTime === 0 && !readable(z) && z.x < FIELD_W, `${g.typingTime} ${z.x}`);
   z.x = 300;
   update(g, 1);
   assert.equal(g.typingTime, 1);
@@ -542,12 +545,17 @@ test('a Japanese word can be shot once its romaji, as the player spells it, is o
   assert.equal(target(g), z);
 });
 
-test('in every word and boss line, no spelling of a unit is the start of another one of it', () => {
+/** Every prompt of the game: each category's words and boss lines in both languages, and the passages. */
+const everyPrompt = () =>
+  (['en', 'ja'] as const).flatMap((lang) => [
+    ...CATEGORIES.flatMap((c) => [...Object.values(pools(lang, c)).flat(), ...lines(lang, c).flat()]),
+    ...passages(lang).flatMap((p) => p.parts),
+  ]);
+
+test('in every word, boss line and passage, no spelling of a unit is the start of another one of it', () => {
   // typeKey ends a unit at the first whole spelling, so a longer one starting with it could never be typed
-  for (const lang of ['en', 'ja'] as const) {
-    for (const p of [...Object.values(pools(lang)).flat(), ...lines(lang).flat()]) {
-      for (const unit of p.units) for (const a of unit) for (const b of unit) assert.ok(a === b || !b.startsWith(a), `${p.show}: ${a} / ${b}`);
-    }
+  for (const p of everyPrompt()) {
+    for (const unit of p.units) for (const a of unit) for (const b of unit) assert.ok(a === b || !b.startsWith(a), `${p.show}: ${a} / ${b}`);
   }
 });
 
@@ -616,4 +624,175 @@ test('word list: lowercase a-z only, each group within its length range (12 lett
       assert.ok(w.length >= min && w.length <= max, `${group}: ${w}`);
     }
   }
+});
+
+test('a part of a Japanese line or passage never ends in っ, nor in ん where the sentence would take a single n', () => {
+  // each part is typed as a word of its own: a part ending in ん needs nn (xn, n'), which the sentence typed as one needs
+  // only before a vowel, y, n or ー (the next part's first kana spelled so in every way); one ending in っ cannot double
+  const texts = [...CATEGORIES.flatMap((c) => lines('ja', c)), ...passages('ja').map((p) => p.parts)];
+  for (const parts of texts) {
+    parts.slice(0, -1).forEach((p, i) => {
+      const last = p.units.at(-1)!;
+      assert.ok(!last.includes('ltu'), `${p.show} / ${parts[i + 1].show}`);
+      if (last.includes('nn')) assert.ok(parts[i + 1].units[0].every((s) => /^[aiueoyn-]/.test(s)), `${p.show} / ${parts[i + 1].show}`);
+    });
+  }
+});
+
+test('Space shoots only where the text has a space next; elsewhere it is let off, costing no round and no miss', () => {
+  const g = quiet();
+  spawn(g, [english('no pain')], 300, 0);
+  assert.equal(typeKey(g, ' '), 'none');
+  assert.deepEqual(typeWord(g, 'no'), ['hit', 'hit']);
+  assert.equal(typeKey(g, 'p'), 'miss'); // the space is due: another key misses
+  assert.equal(typeKey(g, ' '), 'hit');
+  assert.equal(typeKey(g, ' '), 'none');
+  assert.deepEqual(typeWord(g, 'pain'), ['hit', 'hit', 'hit', 'kill']);
+  assert.equal(g.ammo, MAGAZINE - 8);
+  assert.equal(g.misses, 1);
+});
+
+test('romaji: the marks of a sentence are typed as the IMEs take them; a single n before a mark is ん', () => {
+  for (const [reading, keys] of [['ほん、', 'hon,'], ['ほん、', 'honn,'], ['あっ！', 'altu!'], ['「はい」。', '[hai].'], ['え？', 'e?'], ['あ・い〜', 'a/i~']]) {
+    assert.ok(types(reading, keys), `${reading}: ${keys}`);
+  }
+  assert.ok(!types('ほん。', 'ho.'));
+});
+
+test('every category has words in each group and boss lines in both languages; digits and code play as the English game', () => {
+  for (const c of CATEGORIES) {
+    for (const lang of ['en', 'ja'] as const) {
+      for (const group of Object.values(pools(lang, c))) assert.ok(group.length > 0, `${c} ${lang}`);
+      assert.ok(lines(lang, c).length > 0, `${c} ${lang} lines`);
+    }
+  }
+  assert.equal(newGame('mission', 1, 'ja', {}, {}, 'symbols').lang, 'en');
+  assert.equal(newGame('mission', 1, 'ja', {}, {}, 'places').lang, 'ja');
+  assert.equal(newGame('passage', 1, 'ja', {}, {}, 'symbols').lang, 'ja'); // the passage's text is not the category's
+  // the keys of what is typed as written can be typed: lowercase (the keys are taken in lowercase), no backslash (¥ on a
+  // Japanese keyboard), and one space between words, none at either end
+  for (const p of everyPrompt()) {
+    for (const unit of p.units) for (const s of unit) assert.match(s, /^[ -[\]-~]+$/, p.show);
+    assert.doesNotMatch(spelled(p), /[A-Z]|^ | $|  /, p.show);
+  }
+});
+
+test('a long word walks slower: its walk leaves WALK_SLACK times the time its keys take at the speed of its level', () => {
+  const g = newGame('mission', 1, 'en', {}, {}, 'classic');
+  playUntil(g, () => g.zombies.length > 0, () => 0.99); // the fastest of its kind (jitter 1.2): the cap holds for it too
+  const z = g.zombies[0];
+  const d = difficulty(1, 'en', 'classic');
+  const keys = z.prompts.reduce((n, p) => n + spelled(p).length, 0);
+  assert.ok((FIELD_W - PLAYER_X) / z.speed >= ((WALK_SLACK * keys * 12) / d.wpm) * 0.999, `${z.word} ${z.speed}`);
+  assert.ok(z.speed < d.speed * 0.8, `${z.word}: a saying is slower than the level's walkers`);
+});
+
+test('a zombie that cannot be shot yet walks in at BASE_SPEED at least; once it can, at its own speed', () => {
+  const g = quiet();
+  const z = spawn(g, [english('better late than never')], FIELD_W + 16, 5);
+  update(g, 0.1);
+  assert.ok(Math.abs(z.x - (FIELD_W + 16 - BASE_SPEED * 0.1)) < 1e-9, `${z.x}`);
+  z.x = 300;
+  update(g, 0.1);
+  assert.ok(Math.abs(z.x - (300 - 5 * 0.1)) < 1e-9, `${z.x}`);
+});
+
+test('a wave of long words has fewer of them, each hurting as many times more at the barricade; they come further apart', () => {
+  const sizes = (lang: 'en' | 'ja', c: 'night' | 'classic' | 'places') =>
+    [0, 0.5, 0.99].map((r) => {
+      const g = newGame('mission', 1, lang, {}, {}, c);
+      update(g, 0.1, () => r);
+      return g.toSpawn;
+    });
+  assert.deepEqual(sizes('en', 'night'), [8, 10, 12]);
+  assert.deepEqual(sizes('ja', 'places'), [8, 10, 12]); // a little longer, not twice: as the night
+  assert.deepEqual(sizes('en', 'classic'), [3, 3, 4]); // a third
+  assert.deepEqual(sizes('ja', 'classic'), [4, 5, 6]); // a half
+  // English proverbs are about 3 times as long as the night's words, Japanese sayings 2: a boss hurts as ever, and in the
+  // score attack (its field keeps its number) every zombie as its kind does
+  const hurtBy = (lang: 'en' | 'ja', c: 'night' | 'classic', kind: 'walker' | 'brute' | 'boss' = 'walker', mode: 'mission' | 'attack' = 'mission') => {
+    const g = newGame(mode, 1, lang, {}, {}, c);
+    Object.assign(g, { wave: 1, toSpawn: 1, nextSpawnAt: Infinity, waveStart: 0 });
+    spawn(g, [english('ab')], PLAYER_X + 1, 10, kind);
+    update(g, 0.5);
+    assert.equal(MAX_HP - g.hp, hurtOf(g, kind));
+    return MAX_HP - g.hp;
+  };
+  assert.deepEqual(
+    [hurtBy('en', 'night'), hurtBy('en', 'classic'), hurtBy('ja', 'classic'), hurtBy('en', 'classic', 'brute'), hurtBy('en', 'classic', 'boss'), hurtBy('en', 'classic', 'walker', 'attack')],
+    [1, 3, 2, 6, 3, 1],
+  );
+  // and they come further apart: the gap is the time the level's speed takes for the category's words
+  assert.ok(difficulty(1, 'en', 'classic').interval > 2 * difficulty(1, 'en').interval);
+});
+
+test('the passage mode: one giant with a whole passage, walking at its pace; every key pushes it back; beating it wins', () => {
+  const g = newGame('passage', 2, 'en');
+  for (let i = 0; i < 1000 && g.zombies.length === 0; i++) update(g, 0.05, () => 0); // nobody types
+  const giant = g.zombies[0];
+  assert.equal(giant.kind, 'boss');
+  assert.equal(g.passage, 0);
+  assert.equal(giant.prompts, passages('en')[0].parts);
+  assert.ok(readable(giant) && giant.x <= FIELD_W - 54); // on screen from the start, all of it (drawn 3 times as big)
+  const d = difficulty(2 * WAVES, 'en'); // as hard as the last wave of the mission chosen (2)
+  const keys = giant.prompts.reduce((n, p) => n + spelled(p).length, 0);
+  // it walks GIANT_PACE px in the time the passage takes at the level's speed, reading each part
+  assert.ok(Math.abs(giant.speed - GIANT_PACE / ((keys * 12) / d.wpm + giant.prompts.length * READ_TIME)) < 1e-9);
+  for (let i = 0; i < 600; i++) {
+    update(g, 0.05, () => 0);
+    assert.equal(g.zombies.length, 1); // it calls no walkers
+  }
+  assert.equal(g.hp, MAX_HP);
+  Object.assign(g, { ammo: MAGAZINE, lockedId: giant.id });
+  giant.x = 100; // well away from the right edge, which no push goes past
+  while (giant.part === 0) {
+    const x = giant.x;
+    assert.notEqual(typeKey(g, guide(giant).rest[0]), 'none');
+    assert.ok(Math.abs(giant.x - x - GIANT_PACE / keys) < 1e-9, `${giant.x - x}`); // each key the same, a part's end no more
+  }
+  // a miss pushes nothing; while the rifle is reloaded the giant stands still, then walks on
+  g.ammo = 1;
+  const still = giant.x;
+  assert.equal(typeKey(g, '#'), 'miss');
+  assert.equal(giant.x, still);
+  update(g, RELOAD_TIME - 0.1, () => 0);
+  assert.equal(giant.x, still);
+  update(g, 0.2, () => 0);
+  assert.ok(giant.x < still);
+  giant.x = FIELD_W - 60; // no push takes it past its spot at the right edge
+  Object.assign(g, { ammo: MAGAZINE, lockedId: giant.id });
+  while (giant.part === 1) assert.notEqual(typeKey(g, guide(giant).rest[0]), 'none');
+  assert.equal(giant.x, FIELD_W - 54);
+  // the last part: every key pushes it back as much as at the start (the passage's keys, not those left); the last beats it
+  Object.assign(giant, { part: giant.prompts.length - 1, word: giant.prompts.at(-1)!.show, typed: 0, keys: '', done: '', x: 100 });
+  Object.assign(g, { ammo: MAGAZINE, lockedId: giant.id });
+  while (giant.diedAt === null) {
+    const x = giant.x;
+    assert.notEqual(typeKey(g, guide(giant).rest[0]), 'none');
+    assert.ok(Math.abs(giant.x - x - GIANT_PACE / keys) < 1e-9, `${giant.x - x}`);
+  }
+  update(g, FALL_TIME + 0.1, () => 0);
+  update(g, 0.1, () => 0);
+  assert.equal(g.cleared, true);
+  assert.equal(g.bosses, 1);
+});
+
+test('the passage mode in Japanese: every key pushes the giant back the same, a kana of two keys twice; the barricade costs 3 HP', () => {
+  const g = newGame('passage', 1, 'ja');
+  for (let i = 0; i < 1000 && g.zombies.length === 0; i++) update(g, 0.05, () => 0.5);
+  const giant = g.zombies[0];
+  const keys = giant.prompts.reduce((n, p) => n + spelled(p).length, 0);
+  Object.assign(g, { ammo: MAGAZINE, lockedId: giant.id });
+  giant.x = 100;
+  assert.ok(spelled(giant.prompts[0]).length > giant.prompts[0].units.length); // a part of kana of one key and of more
+  while (giant.part === 0) {
+    const x = giant.x;
+    assert.notEqual(typeKey(g, guide(giant).rest[0]), 'none');
+    assert.ok(Math.abs(giant.x - x - GIANT_PACE / keys) < 1e-9, `${giant.x - x}`); // every key, not only a kana's last
+  }
+  giant.x = PLAYER_X + 1;
+  for (const z of g.zombies) if (z !== giant) z.diedAt = g.time;
+  update(g, 0.5, () => 0.5);
+  assert.equal(g.hp, MAX_HP - KINDS.boss.damage);
+  assert.ok(giant.x > PLAYER_X + BOSS_BOUNCE - 20);
 });

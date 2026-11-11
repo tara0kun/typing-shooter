@@ -1,5 +1,10 @@
+import { PASSAGES_EN, PASSAGES_JA } from './passages.ts';
 import { romajiUnits } from './romaji.ts';
+import { CLASSIC_EN, CLASSIC_JA } from './words-classic.ts';
+import { EVERYDAY_EN, EVERYDAY_JA } from './words-everyday.ts';
 import { BOSS_LINES_JA, WORDS_JA } from './words-ja.ts';
+import { PLACES_EN, PLACES_JA } from './words-places.ts';
+import { SYMBOLS } from './words-symbols.ts';
 import { BOSS_LINES, WORDS } from './words.ts';
 
 /** Game rules only: no DOM, no drawing, so it can be tested directly. Distances are field pixels, times are seconds. */
@@ -20,9 +25,23 @@ export const BOSS_EVERY = 5; // the endless night has a boss on every 5th wave
 export const BOSS_PUSH = 48; // each part of its line typed pushes the boss back this far
 export const BOSS_BOUNCE = 200; // a boss that reaches the barricade hits it and staggers back this far
 export const MINION_GAP = 3; // a walking boss calls a walker every this many of its level's gaps between zombies
+// the passage's giant walks GIANT_PACE px in the time its whole passage takes at the level's speed (READ_TIME to read each
+// part, then its keys), and stands still while the rifle is reloaded; every key typed pushes it back GIANT_PACE / the
+// passage's keys. A typist at that speed holds it where it is, a slower one loses ground in proportion, for a short passage
+// as for a long one and at every level (a reload, the same for everyone, would blur that at the fast levels)
+export const GIANT_PACE = 3800;
+const GIANT_X = FIELD_W - 54; // the giant (drawn 3 times as big) stands no further right: there it is all on screen
+// a zombie walks at most so fast that crossing the field (right edge to barricade) takes this many times the time its
+// words take at the level's speed: only a long word slows it. It walks in faster (BASE_SPEED) until it can be shot, so
+// the time it can be shot is about 2 to 2.4 times
+export const WALK_SLACK = 2.5;
+export const READ_TIME = 0.6; // s to read a new part, as the simulated typist (from the typing research)
 
-export type Mode = 'mission' | 'endless' | 'attack' | 'practice';
+export type Mode = 'mission' | 'endless' | 'attack' | 'practice' | 'passage';
 export type Lang = 'en' | 'ja';
+/** What the words are about: the night (the first set), everyday things, old sayings, places, digits and code. */
+export type Category = 'night' | 'everyday' | 'classic' | 'places' | 'symbols';
+export const CATEGORIES: Category[] = ['night', 'everyday', 'classic', 'places', 'symbols'];
 export type Kind = 'walker' | 'runner' | 'brute' | 'boss';
 
 /** How each kind walks, hurts and scores: a runner carries a short word, a brute two words, a boss a whole line. */
@@ -63,6 +82,8 @@ export type Spelling = Record<string, string>;
 export interface Game {
   mode: Mode;
   lang: Lang;
+  category: Category;
+  passage: number; // the passage mode's text (its index in passages(lang)), -1 before it comes
   mission: number; // each mission is harder than the one before
   wave: number; // 1-based; in a mission the wave after the last normal one is the boss's
   boss: boolean; // this wave is a boss wave
@@ -95,36 +116,63 @@ export interface Game {
 
 export type KeyResult = 'hit' | 'part' | 'kill' | 'miss' | 'none';
 
-export function newGame(mode: Mode = 'mission', mission = 1, lang: Lang = 'en', history: KeyStats = {}, spell: Spelling = {}): Game {
+export function newGame(
+  mode: Mode = 'mission', mission = 1, lang: Lang = 'en', history: KeyStats = {}, spell: Spelling = {}, category: Category = 'night',
+): Game {
   return {
-    mode, lang, mission, wave: 0, boss: false, toSpawn: 0, waveStart: 0, nextSpawnAt: 0, minionAt: Infinity, spawned: 0,
+    // digits and code are typed as written: they play as the English game (the passage mode's text is not the category's)
+    mode, lang: category === 'symbols' && mode !== 'passage' ? 'en' : lang,
+    category, passage: -1, mission, wave: 0, boss: false, toSpawn: 0, waveStart: 0, nextSpawnAt: 0, minionAt: Infinity, spawned: 0,
     time: 0, hp: MAX_HP, zombies: [], lockedId: null, nextId: 1, ammo: MAGAZINE, reloadUntil: 0, kills: 0, bosses: 0,
     hits: 0, misses: 0, combo: 0, maxCombo: 0, score: 0, typingTime: 0, keyStats: {}, history, spell, over: false, cleared: false,
   };
 }
 
-type Pool = Record<'short' | 'medium' | 'long', Prompt[]>;
-const POOLS: Record<Lang, Pool> = {
-  en: { short: WORDS.short.map(english), medium: WORDS.medium.map(english), long: WORDS.long.map(english) },
-  ja: {
-    short: WORDS_JA.short.map(([t, r]) => japanese(t, r)),
-    medium: WORDS_JA.medium.map(([t, r]) => japanese(t, r)),
-    long: WORDS_JA.long.map(([t, r]) => japanese(t, r)),
-  },
-};
-const LINES: Record<Lang, Prompt[][]> = {
-  en: BOSS_LINES.map((line) => line.map(english)),
-  ja: BOSS_LINES_JA.map((line) => line.map(([t, r]) => japanese(t, r))),
-};
-export const pools = (lang: Lang) => POOLS[lang];
-export const lines = (lang: Lang) => LINES[lang];
+/** A category's words in one language: three groups by keys (short, medium, long) and boss lines cut into parts. */
+export interface Words<W> {
+  short: W[];
+  medium: W[];
+  long: W[];
+  lines: W[][];
+}
+type Group = 'short' | 'medium' | 'long';
+interface WordSet extends Words<Prompt> {
+  mean: Record<Group, number>; // the average keys of each group (as the guide spells them)
+}
 
 /** The guide's spelling of a prompt (the first spelling of each unit): the keys a Japanese label shows under the word. */
 export const spelled = (p: Prompt) => p.units.map((u) => u[0]).join('');
 const meanKeys = (ps: Prompt[]) => ps.reduce((n, p) => n + spelled(p).length, 0) / ps.length;
-const MEAN = Object.fromEntries(
-  (['en', 'ja'] as const).map((l) => [l, { short: meanKeys(POOLS[l].short), medium: meanKeys(POOLS[l].medium), long: meanKeys(POOLS[l].long) }]),
-) as Record<Lang, Record<keyof Pool, number>>;
+function wordSet<W>(w: Words<W>, prompt: (word: W) => Prompt): WordSet {
+  const [short, medium, long] = [w.short.map(prompt), w.medium.map(prompt), w.long.map(prompt)];
+  return { short, medium, long, lines: w.lines.map((l) => l.map(prompt)), mean: { short: meanKeys(short), medium: meanKeys(medium), long: meanKeys(long) } };
+}
+const en = (w: Words<string>) => wordSet(w, english);
+const ja = (w: Words<[string, string]>) => wordSet(w, ([t, r]) => japanese(t, r));
+const SETS: Record<Category, Record<Lang, WordSet>> = {
+  night: { en: en({ ...WORDS, lines: BOSS_LINES }), ja: ja({ ...WORDS_JA, lines: BOSS_LINES_JA }) },
+  everyday: { en: en(EVERYDAY_EN), ja: ja(EVERYDAY_JA) },
+  classic: { en: en(CLASSIC_EN), ja: ja(CLASSIC_JA) },
+  places: { en: en(PLACES_EN), ja: ja(PLACES_JA) },
+  symbols: { en: en(SYMBOLS), ja: en(SYMBOLS) }, // typed as written in both; a game of them runs as the English one (newGame)
+};
+/** A long text for the passage mode: its title (and author), cut into parts of a sentence or so. */
+export interface Passage {
+  title: string;
+  parts: Prompt[];
+}
+const PASSAGES: Record<Lang, Passage[]> = {
+  en: PASSAGES_EN.map((p) => ({ title: p.title, parts: p.parts.map(english) })),
+  ja: PASSAGES_JA.map((p) => ({ title: p.title, parts: p.parts.map(([t, r]) => japanese(t, r)) })),
+};
+const set = (g: Game) => SETS[g.category][g.lang];
+export const pools = (lang: Lang, category: Category = 'night') => {
+  const { short, medium, long } = SETS[category][lang];
+  return { short, medium, long };
+};
+export const lines = (lang: Lang, category: Category = 'night') => SETS[category][lang].lines;
+export const passages = (lang: Lang) => PASSAGES[lang];
+
 // how much faster than in English a level asks to type: Japanese players type Japanese romaji faster (missions 1/3/5/8 then
 // ask 1.2/2.1/3.0/4.5 keys a second, between school targets and a typing site's average of about 3.5); 1.1 if children play
 const PACE: Record<Lang, number> = { en: 1, ja: 1.2 };
@@ -138,13 +186,13 @@ const BRUTE_COST = 1.2;
  * average keys of the level's mix (a brute carries two words); they also walk faster, and the words get longer.
  */
 // shortcut: fitted to a simulated typist (gaps, misses and reading time from the research), not to real players; retune after people play
-export function difficulty(level: number, lang: Lang = 'en') {
+export function difficulty(level: number, lang: Lang = 'en', category: Category = 'night') {
   const n = level - 1;
   const short = Math.max(0.15, 0.65 - 0.05 * n); // shares of short and long words, the rest are medium
   const long = Math.min(0.45, Math.max(0, 0.04 * (n - 2))); // long words from mission 2 on
   const runner = Math.min(0.2, Math.max(0, 0.03 * (n - 2))); // shares of runners (from level 4) and brutes (from level 7)
   const brute = Math.min(0.15, Math.max(0, 0.02 * (n - 5)));
-  const m = MEAN[lang];
+  const m = SETS[category][lang].mean;
   const word = short * m.short + (1 - short - long) * m.medium + long * m.long;
   // a runner's short word counts as more, it leaves less time; a brute's two words as more, it hits twice as hard
   const keys = (1 - runner - brute) * word + runner * RUNNER_COST * m.short + brute * BRUTE_COST * 2 * m.medium;
@@ -152,8 +200,16 @@ export function difficulty(level: number, lang: Lang = 'en') {
   return { wpm, interval: (keys * 12) / wpm, speed: BASE_SPEED * Math.min(2, 1 + 0.03 * n), short, long, runner, brute };
 }
 
-/** The level of the wave being played: missions climb one a wave (the boss's wave is as hard as the last), the endless night two. */
-export const level = (g: Game) => (g.mode === 'mission' ? (g.mission - 1) * WAVES + Math.min(g.wave, WAVES) : 2 * g.wave - 1);
+/**
+ * The level of the wave being played: missions climb one a wave (the boss's wave is as hard as the last), the endless
+ * night two; the passage mode is as hard as the last wave of the mission chosen for it.
+ */
+export function level(g: Game) {
+  if (g.mode === 'mission') return (g.mission - 1) * WAVES + Math.min(g.wave, WAVES);
+  return g.mode === 'passage' ? g.mission * WAVES : 2 * g.wave - 1;
+}
+/** The difficulty of the wave being played, for the game's language and words. */
+const now = (g: Game) => difficulty(level(g), g.lang, g.category);
 
 /** x1.0, plus 0.1 for every 10 correct keys in a row. */
 export const multiplier = (combo: number) => 1 + Math.floor(combo / 10) / 10;
@@ -229,9 +285,11 @@ export function guide(z: Zombie, spell: Spelling = {}): { done: string; rest: st
 export function typeKey(g: Game, ch: string): KeyResult {
   const t = g.over || g.ammo === 0 ? undefined : target(g);
   if (!t) return 'none';
-  if (--g.ammo === 0) g.reloadUntil = g.time + RELOAD_TIME;
   const units = t.prompts[t.part].units;
   const keys = t.keys + ch;
+  // Space shoots only where the text has a space next; anywhere else it is let off (a habit from typing tests)
+  if (ch === ' ' && !units[t.typed].some((s) => s.startsWith(keys))) return 'none';
+  if (--g.ammo === 0) g.reloadUntil = g.time + RELOAD_TIME;
   // a word's first key also carries the reading and the finding of it: it does not count for or against the key
   const first = t.typed === 0 && t.keys === '';
   if (!units[t.typed].some((s) => s.startsWith(keys))) {
@@ -245,6 +303,8 @@ export function typeKey(g: Game, ch: string): KeyResult {
   g.maxCombo = Math.max(g.maxCombo, ++g.combo);
   g.lockedId = t.id;
   t.keys = keys;
+  const giant = t.kind === 'boss' && g.mode === 'passage';
+  if (giant) pushBack(t, GIANT_PACE / passageKeys(t.prompts), GIANT_X); // every key pushes the giant back (see GIANT_PACE)
   if (units[t.typed].includes(keys)) {
     // a whole spelling: the unit is done (no spelling of a unit is the start of another, the tests check that)
     if (units[t.typed].length > 1) g.spell[units[t.typed][0]] = keys; // the guide shows it this way from now on
@@ -259,7 +319,7 @@ export function typeKey(g: Game, ch: string): KeyResult {
     t.word = t.prompts[t.part].show;
     t.typed = 0;
     t.done = '';
-    if (t.kind === 'boss') t.x = Math.max(t.x, Math.min(FIELD_W - 40, t.x + BOSS_PUSH)); // back, never forward
+    if (t.kind === 'boss' && !giant) pushBack(t, BOSS_PUSH, FIELD_W - 40);
     return 'part';
   }
   t.diedAt = g.time;
@@ -271,6 +331,13 @@ export function typeKey(g: Game, ch: string): KeyResult {
     for (const z of g.zombies) if (z.diedAt === null) z.diedAt = g.time;
   }
   return 'kill';
+}
+
+const passageKeys = (parts: Prompt[]) => parts.reduce((n, p) => n + spelled(p).length, 0);
+
+/** Back, never forward (one walking in from the right edge stays where it is), and never past `right` (off the screen). */
+function pushBack(z: Zombie, px: number, right: number) {
+  z.x = Math.max(z.x, Math.min(right, z.x + px));
 }
 
 function count(g: Game, key: string | undefined, missed: boolean) {
@@ -310,14 +377,18 @@ export function update(g: Game, dt: number, rand: () => number = Math.random): v
   if (g.over) return;
   g.time += dt;
   if (g.ammo === 0 && g.time >= g.reloadUntil) g.ammo = MAGAZINE;
-  if (g.mode === 'mission' || g.mode === 'endless') waves(g, rand);
-  else busy(g, rand);
+  if (g.mode === 'attack' || g.mode === 'practice') busy(g, rand);
+  else waves(g, rand);
   if (g.over) return;
   if (g.ammo > 0 && target(g)) g.typingTime += dt; // the WPM clock: a word to read and rounds to shoot it
-  for (const z of g.zombies) if (z.diedAt === null) z.x -= z.speed * dt;
+  for (const z of g.zombies) {
+    if (z.diedAt !== null || (g.ammo === 0 && z.kind === 'boss' && g.mode === 'passage')) continue; // the giant waits for the reload
+    // one that cannot be shot yet walks in at BASE_SPEED at least: a slow one (long words) would keep the player waiting
+    z.x -= (readable(z, g.spell) ? z.speed : Math.max(z.speed, BASE_SPEED)) * dt;
+  }
   const reached = g.zombies.filter((z) => z.diedAt === null && z.x <= PLAYER_X);
   for (const z of reached) {
-    if (g.mode !== 'practice') g.hp = Math.max(0, g.hp - KINDS[z.kind].damage);
+    if (g.mode !== 'practice') g.hp = Math.max(0, g.hp - hurtOf(g, z.kind));
     if (z.kind === 'boss') z.x += BOSS_BOUNCE; // it hits the barricade and staggers back, still carrying its line
     else if (z.id === g.lockedId) g.lockedId = null;
   }
@@ -325,25 +396,28 @@ export function update(g: Game, dt: number, rand: () => number = Math.random): v
   g.over = g.hp === 0;
 }
 
-/** Missions and the endless night: waves after a break; a boss after a mission's last wave and on every 5th endless one. */
+/**
+ * Missions, the endless night and the passage: waves after a break; a boss after a mission's last wave and on every 5th
+ * endless one; the passage mode is one wave, its giant's.
+ */
 function waves(g: Game, rand: () => number) {
   if (g.toSpawn === 0 && g.zombies.length === 0) {
     // the wave is over (or the game has just begun)
-    if (g.mode === 'mission' && g.boss) {
+    if (g.mode !== 'endless' && g.boss) {
       g.cleared = g.over = true;
       return;
     }
     g.wave++;
-    g.boss = g.mode === 'mission' ? g.wave > WAVES : g.wave % BOSS_EVERY === 0;
-    g.toSpawn = g.boss ? 1 : 8 + Math.floor(rand() * 5);
+    g.boss = g.mode === 'passage' || (g.mode === 'mission' ? g.wave > WAVES : g.wave % BOSS_EVERY === 0);
+    g.toSpawn = g.boss ? 1 : Math.max(3, Math.round((8 + Math.floor(rand() * 5)) / factor(g)));
     g.waveStart = g.nextSpawnAt = g.time + WAVE_BREAK;
   }
-  const d = difficulty(level(g), g.lang);
+  const d = now(g);
   if (g.toSpawn > 0 && g.time >= g.nextSpawnAt) {
     spawnKind(g, d, rand, g.boss ? 'boss' : pickKind(d, rand));
     g.toSpawn--;
     g.nextSpawnAt = g.time + d.interval;
-    if (g.boss) g.minionAt = g.time + MINION_GAP * d.interval;
+    if (g.boss && g.mode !== 'passage') g.minionAt = g.time + MINION_GAP * d.interval; // the giant calls none: its passage is enough
   }
   // a walking boss calls a walker now and then
   if (g.boss && g.time >= g.minionAt && g.zombies.some((z) => z.kind === 'boss' && z.diedAt === null)) {
@@ -371,10 +445,11 @@ function busy(g: Game, rand: () => number) {
   const alive = g.zombies.filter((z) => z.diedAt === null).length;
   if (g.mode === 'attack') {
     // a level every 5 s (mission 1 at the start, mission 5 near the end), one more zombie on the field every 15 s
-    const d = difficulty(1 + Math.floor(t / 5), g.lang);
+    const d = difficulty(1 + Math.floor(t / 5), g.lang, g.category);
     if (alive < 2 + Math.floor(t / 15)) spawnKind(g, d, rand, pickKind(d, rand));
   } else if (alive < 2 && g.spawned < PRACTICE_WORDS) {
-    spawn(g, [practicePrompt(g, rand)], FIELD_W + 16, difficulty(1, g.lang).speed * 0.8);
+    const [p, d] = [[practicePrompt(g, rand)], difficulty(1, g.lang, g.category)];
+    spawn(g, p, FIELD_W + 16, walk(p, d, d.speed * 0.8));
   }
   g.nextSpawnAt = g.time + 0.8;
 }
@@ -384,10 +459,38 @@ function pickKind(d: ReturnType<typeof difficulty>, rand: () => number): Kind {
   return r < d.runner ? 'runner' : r < d.runner + d.brute ? 'brute' : 'walker';
 }
 
+/**
+ * How many times as long as the night's a category's words are (its medium words, in keys), rounded, 1 at least: a
+ * category of long words (old sayings) has that many times fewer zombies in a wave, each hurting that many times more at
+ * the barricade, so that a wave asks for about as many keys with as much HP at stake.
+ */
+const factor = (g: Game) => Math.max(1, Math.round(set(g).mean.medium / SETS.night[g.lang].mean.medium));
+/**
+ * The HP a zombie at the barricade costs: its kind's, times the category's factor where the waves have fewer zombies (not
+ * the score attack, whose field keeps its number; not a boss).
+ */
+export const hurtOf = (g: Game, kind: Kind) => KINDS[kind].damage * (kind === 'boss' || g.mode === 'attack' ? 1 : factor(g));
+
+/**
+ * A zombie's speed: its kind's at the level, but slower for long words (a proverb), so that crossing the field takes
+ * WALK_SLACK times the time the level's speed takes to type them.
+ */
+function walk(prompts: Prompt[], d: ReturnType<typeof difficulty>, speed: number) {
+  const keys = prompts.reduce((n, p) => n + spelled(p).length, 0);
+  return Math.min(speed, (FIELD_W - PLAYER_X) / ((keys * 12) / d.wpm) / WALK_SLACK);
+}
+
 function spawnKind(g: Game, d: ReturnType<typeof difficulty>, rand: () => number, kind: Kind): Zombie {
-  const pool = POOLS[g.lang];
+  const pool = set(g);
   let prompts: Prompt[];
-  if (kind === 'boss') prompts = LINES[g.lang][Math.floor(rand() * LINES[g.lang].length)];
+  if (kind === 'boss' && g.mode === 'passage') {
+    g.passage = Math.floor(rand() * PASSAGES[g.lang].length);
+    prompts = PASSAGES[g.lang][g.passage].parts;
+    // on screen from the start (it walks in too slowly to wait for), at the pace of its passage
+    const keys = passageKeys(prompts);
+    const time = (keys * 12) / d.wpm + prompts.length * READ_TIME;
+    return spawn(g, prompts, GIANT_X, GIANT_PACE / time, kind);
+  } else if (kind === 'boss') prompts = pool.lines[Math.floor(rand() * pool.lines.length)];
   else if (kind === 'runner') prompts = [pick(g, pool.short, rand)];
   else if (kind === 'brute') {
     const first = pick(g, pool.medium, rand);
@@ -396,7 +499,9 @@ function spawnKind(g: Game, d: ReturnType<typeof difficulty>, rand: () => number
     const r = rand();
     prompts = [pick(g, r < d.short ? pool.short : r < 1 - d.long ? pool.medium : pool.long, rand)];
   }
-  return spawn(g, prompts, FIELD_W + (kind === 'boss' ? 40 : 16), d.speed * KINDS[kind].speed * (0.8 + rand() * 0.4), kind);
+  const jitter = 0.8 + rand() * 0.4; // before the cap of long words, which then holds for every zombie
+  const speed = kind === 'boss' ? d.speed * KINDS.boss.speed * jitter : walk(prompts, d, d.speed * KINDS[kind].speed * jitter);
+  return spawn(g, prompts, FIELD_W + (kind === 'boss' ? 40 : 16), speed, kind);
 }
 
 /**
@@ -413,7 +518,7 @@ function pick(g: Game, pool: Prompt[], rand: () => number, also?: Prompt): Promp
 
 /** The practice's next word: the weakest of 16 random ones, so weak keys come often and the words still vary. */
 function practicePrompt(g: Game, rand: () => number): Prompt {
-  const pool = [...POOLS[g.lang].short, ...POOLS[g.lang].medium];
+  const pool = [...set(g).short, ...set(g).medium];
   const rate = missRate(g.keyStats, g.history);
   let best = pool[0];
   let bestScore = -1;

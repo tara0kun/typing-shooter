@@ -26,6 +26,8 @@ const KANA: Record<string, string[]> = {
   ぁ: ['la', 'xa'], ぃ: ['li', 'xi', 'lyi', 'xyi'], ぅ: ['lu', 'xu'], ぇ: ['le', 'xe', 'lye', 'xye'], ぉ: ['lo', 'xo'],
   ゃ: ['lya', 'xya'], ゅ: ['lyu', 'xyu'], ょ: ['lyo', 'xyo'],
   ー: ['-'],
+  // marks of a sentence, typed as both IMEs take them (Mozc's table: , . [ ] ~; ! ? / by the IMEs' default symbols)
+  '、': [','], '。': ['.'], '！': ['!'], '？': ['?'], '「': ['['], '」': [']'], '・': ['/'], '〜': ['~'],
 };
 
 // a kana and a small kana typed as one sound
@@ -88,7 +90,7 @@ export function romajiUnits(reading: string): string[][] {
     } else if (p === 'ん') {
       if (!next) units.unshift(['nn', 'xn', "n'"]); // at the end a single n would not be a finished ん
       else {
-        // a single n only before a key that cannot follow n in another kana (not a vowel, y, n, or ー)
+        // a single n only before a key that cannot follow n in another kana (not a vowel, y, n, or ー; a mark is fine: n, = ん、)
         const single = next.filter((s) => !/^[aiueoyn-]/.test(s)).map((s) => 'n' + s);
         units[0] = unique([...single, ...['nn', 'xn', "n'"].flatMap((n) => next.map((s) => n + s))]);
       }
