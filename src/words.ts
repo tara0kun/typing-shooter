@@ -1,0 +1,70 @@
+/**
+ * Own word list (lowercase a-z only), grouped by length: short 3-5, medium 6-8, long 9-12 (12 at most, so a label fits).
+ * Picked by hand as common words a Japanese high-school learner would know: about 60% fit the night (ruins, survival,
+ * weather, tools), the rest are everyday words. Checked against a US dictionary and general frequency lists.
+ */
+export const WORDS = {
+  short: [
+    'ash', 'bat', 'bone', 'dust', 'fog', 'grave', 'moon', 'rust', 'bite', 'claw',
+    'door', 'fire', 'gate', 'hand', 'iron', 'jaw', 'key', 'lamp', 'mud', 'nail',
+    'owl', 'pit', 'road', 'rope', 'salt', 'tomb', 'wolf', 'yard', 'cold', 'dark',
+    'run', 'aim', 'shot', 'hide', 'rot', 'howl', 'fear', 'crow', 'mist', 'sigh',
+    'alarm', 'apple', 'brick', 'bread', 'bell', 'box', 'brave', 'cave', 'chain', 'cloud',
+    'cup', 'cake', 'cat', 'dawn', 'dog', 'dream', 'echo', 'egg', 'eagle', 'flame',
+    'fox', 'fork', 'glass', 'glow', 'grape', 'hill', 'honey', 'hope', 'ice', 'idea',
+    'jump', 'juice', 'joy', 'knock', 'kite', 'lock', 'lemon', 'laugh', 'milk', 'mouse',
+    'noise', 'nest', 'onion', 'oven', 'pipe', 'panic', 'pizza', 'plate', 'pen', 'quiet',
+    'quick', 'quiz', 'rain', 'rice', 'storm', 'smoke', 'snow', 'star', 'soup', 'smile',
+    'sock', 'tree', 'tower', 'table', 'tiger', 'tea', 'tired', 'upset', 'van', 'voice',
+    'vase', 'wall', 'wind', 'water', 'watch', 'wish', 'yell', 'zone', 'zero', 'zoo',
+  ],
+  medium: [
+    'shadow', 'hunger', 'rotten', 'bullet', 'shelter', 'midnight', 'silence', 'whisper',
+    'blanket', 'lantern', 'rooftop', 'helmet', 'survive', 'monster', 'shuffle', 'vacant',
+    'broken', 'window', 'station', 'bridge', 'engine', 'signal', 'danger', 'escape',
+    'harbor', 'ladder', 'pocket', 'static', 'survivor', 'darkness', 'airport', 'afraid',
+    'animal', 'anchor', 'battery', 'blizzard', 'banana', 'bottle', 'candle', 'concrete',
+    'compass', 'cheese', 'cookie', 'curtain', 'curious', 'distant', 'dolphin', 'dinner',
+    'evening', 'elephant', 'excited', 'forest', 'fortress', 'frozen', 'factory', 'finger',
+    'flower', 'family', 'garage', 'gasoline', 'garden', 'giraffe', 'guitar', 'hammer',
+    'highway', 'hospital', 'holiday', 'island', 'insect', 'jungle', 'jacket', 'journey',
+    'kitchen', 'kettle', 'kangaroo', 'library', 'lonely', 'mirror', 'medicine', 'mushroom',
+    'monkey', 'morning', 'nervous', 'noodle', 'notebook', 'nowhere', 'orange', 'octopus',
+    'outside', 'pumpkin', 'puzzle', 'pillow', 'penguin', 'patrol', 'question', 'quarter',
+    'rubble', 'rescue', 'rumble', 'rabbit', 'street', 'thunder', 'tunnel', 'tornado',
+    'traffic', 'tomato', 'turtle', 'ticket', 'umbrella', 'uniform', 'urgent', 'violin',
+    'vehicle', 'warning', 'winter', 'wallet', 'worried', 'yellow', 'zombie', 'zipper',
+  ],
+  long: [
+    'abandoned', 'barricade', 'nightfall', 'graveyard', 'lighthouse', 'emergency',
+    'infection', 'generator', 'quarantine', 'staircase', 'nightmare', 'footsteps',
+    'flashlight', 'underground', 'checkpoint', 'helicopter', 'wilderness', 'silhouette',
+    'evacuation', 'perimeter', 'ambulance', 'apartment', 'afternoon', 'butterfly',
+    'breakfast', 'brightness', 'basketball', 'collapsed', 'chocolate', 'comfortable',
+    'chimpanzee', 'construction', 'disappear', 'detective', 'dictionary', 'delicious',
+    'adventure', 'exhausted', 'electricity', 'frightened', 'furniture', 'friendship',
+    'forgotten', 'grasshopper', 'hurricane', 'heartbeat', 'hamburger', 'intersection',
+    'invisible', 'imagination', 'jellyfish', 'knowledge', 'kilometer', 'landscape',
+    'mysterious', 'microwave', 'motorcycle', 'marshmallow', 'neighborhood', 'newspaper',
+    'orchestra', 'parachute', 'passenger', 'reflection', 'restaurant', 'refrigerator',
+    'skyscraper', 'screwdriver', 'strawberry', 'supermarket', 'terrified', 'toothbrush',
+    'temperature', 'telescope', 'unexpected', 'vegetable', 'warehouse', 'wandering',
+    'wonderful', 'yesterday',
+  ],
+};
+
+/** Boss lines: the words typed one after another (3-10 letters each). */
+export const BOSS_LINES: string[][] = [
+    ['the', 'night', 'will', 'end'], ['the', 'sun', 'always', 'returns'],
+    ['the', 'sky', 'grows', 'brighter'], ['the', 'morning', 'bell', 'rings'],
+    ['help', 'arrives', 'tomorrow'], ['only', 'one', 'hour', 'left'],
+    ['guard', 'the', 'gate', 'tonight'], ['the', 'barricade', 'stands', 'strong'],
+    ['nail', 'the', 'boards', 'down'], ['this', 'fence', 'will', 'hold'],
+    ['check', 'every', 'window', 'twice'], ['stand', 'firm', 'until', 'sunrise'],
+    ['keep', 'the', 'lantern', 'lit'], ['light', 'chases', 'shadows', 'away'],
+    ['zombies', 'fear', 'the', 'light'], ['your', 'hands', 'are', 'steady'],
+    ['take', 'one', 'brave', 'step'], ['your', 'courage', 'shines', 'bright'],
+    ['the', 'generator', 'hums', 'softly'], ['the', 'moon', 'keeps', 'watch'],
+    ['the', 'stars', 'still', 'shine'], ['the', 'dark', 'city', 'sleeps'],
+    ['hot', 'soup', 'waits', 'inside'], ['someone', 'answers', 'the', 'radio'],
+];
