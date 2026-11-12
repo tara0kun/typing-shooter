@@ -3,6 +3,7 @@ import {
   BARRICADE, BOSS_WALK, BRUTE_BODY_X, BRUTE_WALK, FLASH, GROUND_Y, MUZZLE_AT, PLAYER, PX, RUNNER_BODY_X, RUNNER_RUN,
   ZOMBIE_BODY_X, ZOMBIE_WALK, nightStreet,
 } from './art.ts';
+import { fromTop, music, musicOn, toggleMusic } from './music.ts';
 import { muted, play, toggleMute, unlock } from './sound.ts';
 import {
   ATTACK_TIME, FALL_TIME, FIELD_W, LETTER_W, MAGAZINE, MAX_HP, PLAYER_X, PRACTICE_WORDS, RELOAD_TIME, WAVES,
@@ -106,6 +107,7 @@ function leave(to: 'title' | 'result') {
   }
   const key = bestKey(game.lang, game.category);
   if (to === 'result' && game.mode === 'attack') best[key] = Math.max(best[key] ?? 0, game.score);
+  fromTop();
   screen = to;
 }
 
@@ -136,6 +138,7 @@ addEventListener('keydown', (e) => {
     if (ch === 'l') lang = lang === 'en' ? 'ja' : 'en';
     if (ch === 'c') category = CATEGORIES[(CATEGORIES.indexOf(category) + 1) % CATEGORIES.length];
     if (ch === 'm') toggleMute();
+    if (ch === 'b') toggleMusic();
   } else if (screen === 'result') {
     if (performance.now() - resultAt < 500) return; // a key pressed as the fight ended (Esc meant as pause) must not skip the results
     const next = game.mode === 'mission' && game.cleared ? game.mission + 1 : game.mission;
@@ -145,6 +148,7 @@ addEventListener('keydown', (e) => {
   } else {
     if (e.key === 'Escape') paused = !paused;
     else if (paused && ch === 'm') toggleMute();
+    else if (paused && ch === 'b') toggleMusic();
     else if (paused && e.key === 'Enter') leave('title');
     else if (!paused && ch && !kana) {
       // any character is a shot, so a digit or a mark is a miss too; Space only where the text has one (typeKey)
@@ -182,6 +186,8 @@ requestAnimationFrame(function frame(now) {
       resultAt = now;
     }
   }
+  // the music: in a game (not paused; a boss's own once one is coming), and on the title while the window has the focus
+  music(screen === 'play' ? (paused ? null : game.boss ? 'boss' : 'night') : screen === 'title' && document.hasFocus() ? 'night' : null);
   draw();
   requestAnimationFrame(frame);
 });
@@ -523,7 +529,7 @@ function drawTitle() {
   center(`12px ${SANS}`, '#999', '※ キーボードが必要です（半角英字で打ってください）', 300);
 }
 
-const soundLine = () => `M　音 ${muted ? 'オフ' : 'オン'}`;
+const soundLine = () => `M　効果音 ${muted ? 'オフ' : 'オン'}　B　BGM ${musicOn ? 'オン' : 'オフ'}`;
 
 function drawPause() {
   shade(0.6);

@@ -1,9 +1,9 @@
 /**
- * Sound effects made in code with Web Audio (no audio files, no music): a shot that climbs one step with each letter of
- * the word, a miss, a kill, and a zombie reaching the barricade. M toggles them on the title and pause screens.
+ * Sound effects made in code with Web Audio (no audio files; the music is in music.ts): a shot that climbs one step with each
+ * letter of the word, a miss, a kill, and a zombie reaching the barricade. M toggles them on the title and pause screens (B the music).
  */
 export type Sound = 'shot' | 'miss' | 'kill' | 'hurt';
-type At = { ac: BaseAudioContext; out: AudioNode; t: number };
+export type At = { ac: BaseAudioContext; out: AudioNode; t: number };
 
 const SCALE = [0, 2, 4, 5, 7, 9, 11, 12]; // semitones of a major scale: the letters of a word go up it, an octave at most
 const noises = new WeakMap<BaseAudioContext, AudioBuffer>();
@@ -23,6 +23,7 @@ function noise(ac: BaseAudioContext): AudioBuffer {
 /** Up to `peak` in 2 ms, then down to silence over `len` s (exponential ramps cannot reach 0, so 0.0001 stands for it). */
 function envelope(at: At, peak: number, len: number): GainNode {
   const g = at.ac.createGain();
+  g.gain.value = 0.0001; // silent from the start: a source can start a frame before the time below, at the default gain 1 (a click)
   g.gain.setValueAtTime(0.0001, at.t);
   g.gain.exponentialRampToValueAtTime(peak, at.t + 0.002);
   g.gain.exponentialRampToValueAtTime(0.0001, at.t + len);
@@ -30,7 +31,7 @@ function envelope(at: At, peak: number, len: number): GainNode {
 }
 
 /** Noise through a filter whose frequency falls from `from` to `to`; a new slice of the noise each time, so no two sound alike. */
-function burst(at: At, len: number, peak: number, type: BiquadFilterType, from: number, to = from) {
+export function burst(at: At, len: number, peak: number, type: BiquadFilterType, from: number, to = from) {
   const src = at.ac.createBufferSource();
   src.buffer = noise(at.ac);
   const filter = at.ac.createBiquadFilter();
@@ -43,7 +44,7 @@ function burst(at: At, len: number, peak: number, type: BiquadFilterType, from: 
   src.stop(at.t + len + 0.02);
 }
 
-function tone(at: At, type: OscillatorType, from: number, to: number, len: number, peak: number) {
+export function tone(at: At, type: OscillatorType, from: number, to: number, len: number, peak: number) {
   const osc = at.ac.createOscillator();
   osc.type = type;
   osc.frequency.setValueAtTime(from, at.t);
@@ -75,18 +76,20 @@ export const SOUNDS: Record<Sound, (at: At, letter: number) => void> = {
 };
 
 /**
- * The master volume. No compressor: with the defaults it squashes and lifts everything. Instead the loudest pile-up was
- * measured in a browser (all four sounds at once, then a shot every 1/12 s, rendered offline): peak 0.69-0.75 at this
- * gain (the noise varies), below 0.9. npm test cannot do that (Node has no Web Audio): measure again after making a sound louder.
+ * The master volume, for the effects and the music. No compressor: with the defaults it squashes and lifts everything.
+ * Instead the loudest pile-up was measured in a browser (all four sounds at once, then a shot every 1/12 s, rendered
+ * offline 600 times, the noise different each time): peak 0.41-0.77 at this gain (0.54 the median), 0.86 at most over the
+ * music's loudest moments, below 0.9. At 0.5 the rarest reached 0.94 alone and 1.06 over the music (5 renders had shown
+ * 0.69-0.88). npm test cannot do that (Node has no Web Audio): measure again after making a sound louder.
  */
 export function master(ac: BaseAudioContext): AudioNode {
   const gain = ac.createGain();
-  gain.gain.value = 0.5;
+  gain.gain.value = 0.42;
   gain.connect(ac.destination);
   return gain;
 }
 
-let live: { ac: AudioContext; out: AudioNode } | null = null;
+export let live: { ac: AudioContext; out: AudioNode } | null = null;
 export let muted = false;
 export const toggleMute = () => (muted = !muted);
 
