@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ATTACK_TIME, BASE_SPEED, BOSS_BOUNCE, BOSS_EVERY, BOSS_PUSH, CATEGORIES, FALL_TIME, FIELD_W, GIANT_PACE, KINDS, MAGAZINE, MAX_HP,
-  PLAYER_X, PRACTICE_WORDS, READ_TIME, RELOAD_TIME, WALK_SLACK, WAVES, WAVE_BREAK, accuracy, difficulty, english, grade, guide,
+  ATTACK_TIME, BASE_SPEED, BIG_MAGAZINE, BOSS_BOUNCE, BOSS_EVERY, BOSS_PUSH, CATEGORIES, FALL_TIME, FIELD_W, GIANT_PACE, KINDS, MAGAZINE, MAX_HP,
+  PLAYER_X, PRACTICE_WORDS, QUICK_RELOAD, READ_TIME, RELOAD_TIME, WALK_SLACK, WAVES, WAVE_BREAK, accuracy, difficulty, english, grade, guide,
   hurtOf, japanese, labelWidth, lines, newGame, passages, pools, readable, spawn, spelled, target, typeKey, update, weakKeys, wpm,
   type Game,
 } from '../src/game.ts';
@@ -332,7 +332,7 @@ test('later waves come faster, walk faster and use longer words; long words from
   assert.ok(first(2, 0.5).speed > first(1, 0.5).speed);
 });
 
-test('30 shots empty the magazine; for 2 seconds keys do nothing, then it is full again', () => {
+test('30 shots empty the magazine; after 3 misses or more in it, for 2 seconds keys do nothing, then it is full again', () => {
   const g = quiet();
   const z = spawn(g, 'moon', 300, 0);
   update(g, 10); // not at time 0: the 2 seconds count from the empty magazine
@@ -347,6 +347,40 @@ test('30 shots empty the magazine; for 2 seconds keys do nothing, then it is ful
   assert.equal(g.ammo, MAGAZINE);
   assert.equal(typeKey(g, 'm'), 'hit');
   assert.equal(g.ammo, MAGAZINE - 1);
+});
+
+test("the reload is as long as its magazine's misses make it: 0.5 s with none, 0.5 s more for each, 2 s at most (the last shot counts)", () => {
+  for (const [misses, len] of [[0, 0.5], [1, 1], [2, 1.5], [3, 2], [7, 2]]) {
+    const g = quiet();
+    spawn(g, 'a'.repeat(60), 300, 0);
+    update(g, 10);
+    for (let i = 0; i < MAGAZINE; i++) typeKey(g, i >= MAGAZINE - misses ? 'x' : 'a'); // the misses last
+    assert.equal(g.ammo, 0);
+    assert.ok(Math.abs(g.reloadUntil - g.time - len) < 1e-9 && g.reloadLen === len, `${misses} misses: ${g.reloadUntil - g.time}`);
+    update(g, len - 0.01);
+    assert.equal(g.ammo, 0);
+    update(g, 0.02);
+    assert.equal(g.ammo, misses === 0 ? BIG_MAGAZINE : MAGAZINE);
+  }
+  assert.equal(QUICK_RELOAD * 4, RELOAD_TIME);
+});
+
+test('a magazine emptied without a miss scores 300 x the combo multiplier and loads 40 rounds; a miss in the 40 loads 30 again', () => {
+  const g = quiet();
+  spawn(g, 'a'.repeat(100), 150, 0); // longer than all the rounds typed here (no kill scores), its label on screen
+  update(g, 10);
+  for (let i = 0; i < MAGAZINE; i++) assert.equal(typeKey(g, 'a'), 'hit');
+  assert.deepEqual([g.score, g.bonus, g.bonusAt], [390, 390, g.time]); // combo 30: x1.3
+  update(g, QUICK_RELOAD + 0.01);
+  assert.equal(g.ammo, BIG_MAGAZINE);
+  for (let i = 0; i < BIG_MAGAZINE; i++) typeKey(g, i === 5 ? 'x' : 'a');
+  assert.equal(g.score, 390); // no bonus after a miss
+  assert.equal(g.reloadLen, 1);
+  update(g, 1.01);
+  assert.equal(g.ammo, MAGAZINE);
+  // the misses count per magazine: the next one without a miss scores again (combo 34 + 30 = 64: x1.6)
+  for (let i = 0; i < MAGAZINE; i++) typeKey(g, 'a');
+  assert.equal(g.score, 390 + 480);
 });
 
 test('a kill scores 100 x (1 + 0.1 per 10 combo); a miss resets the combo', () => {
@@ -755,7 +789,7 @@ test('the passage mode: one giant with a whole passage, walking at its pace; eve
   const still = giant.x;
   assert.equal(typeKey(g, '#'), 'miss');
   assert.equal(giant.x, still);
-  update(g, RELOAD_TIME - 0.1, () => 0);
+  update(g, g.reloadLen - 0.1, () => 0); // its reload (1 s: one miss in the magazine)
   assert.equal(giant.x, still);
   update(g, 0.2, () => 0);
   assert.ok(giant.x < still);

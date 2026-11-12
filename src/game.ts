@@ -16,7 +16,10 @@ export const FALL_TIME = 0.8; // a killed zombie stays on screen this long: 0.3 
 export const WAVES = 3; // normal waves per mission; its boss comes after them
 export const WAVE_BREAK = 3; // quiet time before each wave, while its banner shows
 export const MAGAZINE = 30;
-export const RELOAD_TIME = 2;
+export const BIG_MAGAZINE = 40; // the magazine after one emptied without a miss
+export const QUICK_RELOAD = 0.5; // the reload after a magazine without a miss; each miss in it adds as much again
+export const RELOAD_TIME = 2; // the longest reload: 3 misses or more in the magazine
+export const NO_MISS_BONUS = 300; // a magazine emptied without a miss scores this x the combo's multiplier, as a kill does
 export const LETTER_W = 7; // px per letter of a word label (12 px monospace is about 6.6, so the label always fits)
 export const KANA_W = 12; // px per full-width character of a label (Japanese text at 12 px)
 export const ATTACK_TIME = 60; // the score attack's length
@@ -28,7 +31,7 @@ export const MINION_GAP = 3; // a walking boss calls a walker every this many of
 // the passage's giant walks GIANT_PACE px in the time its whole passage takes at the level's speed (READ_TIME to read each
 // part, then its keys), and stands still while the rifle is reloaded; every key typed pushes it back GIANT_PACE / the
 // passage's keys. A typist at that speed holds it where it is, a slower one loses ground in proportion, for a short passage
-// as for a long one and at every level (a reload, the same for everyone, would blur that at the fast levels)
+// as for a long one and at every level (the time of the reloads, counted in, would blur that at the fast levels)
 export const GIANT_PACE = 3800;
 const GIANT_X = FIELD_W - 54; // the giant (drawn 3 times as big) stands no further right: there it is all on screen
 // a zombie walks at most so fast that crossing the field (right edge to barricade) takes this many times the time its
@@ -98,7 +101,12 @@ export interface Game {
   lockedId: number | null;
   nextId: number;
   ammo: number; // 0 while reloading
+  magazine: number; // the rounds this magazine holds (BIG_MAGAZINE after one emptied without a miss)
+  magMisses: number; // misses since this magazine was loaded
   reloadUntil: number;
+  reloadLen: number; // how long the reload takes (set by the misses of the magazine it follows)
+  bonus: number; // the last no-miss bonus, and when it came (for the HUD)
+  bonusAt: number;
   kills: number;
   bosses: number; // bosses beaten
   hits: number; // correct keys
@@ -123,7 +131,8 @@ export function newGame(
     // digits and code are typed as written: they play as the English game (the passage mode's text is not the category's)
     mode, lang: category === 'symbols' && mode !== 'passage' ? 'en' : lang,
     category, passage: -1, mission, wave: 0, boss: false, toSpawn: 0, waveStart: 0, nextSpawnAt: 0, minionAt: Infinity, spawned: 0,
-    time: 0, hp: MAX_HP, zombies: [], lockedId: null, nextId: 1, ammo: MAGAZINE, reloadUntil: 0, kills: 0, bosses: 0,
+    time: 0, hp: MAX_HP, zombies: [], lockedId: null, nextId: 1, ammo: MAGAZINE, magazine: MAGAZINE, magMisses: 0, reloadUntil: 0,
+    reloadLen: RELOAD_TIME, bonus: 0, bonusAt: -Infinity, kills: 0, bosses: 0,
     hits: 0, misses: 0, combo: 0, maxCombo: 0, score: 0, typingTime: 0, keyStats: {}, history, spell, over: false, cleared: false,
   };
 }
@@ -289,18 +298,21 @@ export function typeKey(g: Game, ch: string): KeyResult {
   const keys = t.keys + ch;
   // Space shoots only where the text has a space next; anywhere else it is let off (a habit from typing tests)
   if (ch === ' ' && !units[t.typed].some((s) => s.startsWith(keys))) return 'none';
-  if (--g.ammo === 0) g.reloadUntil = g.time + RELOAD_TIME;
+  g.ammo--;
   // a word's first key also carries the reading and the finding of it: it does not count for or against the key
   const first = t.typed === 0 && t.keys === '';
   if (!units[t.typed].some((s) => s.startsWith(keys))) {
     if (!first) count(g, guide(t, g.spell).rest[0], true);
     g.misses++;
+    g.magMisses++;
     g.combo = 0;
+    if (g.ammo === 0) reload(g);
     return 'miss';
   }
   if (!first) count(g, ch, false);
   g.hits++;
   g.maxCombo = Math.max(g.maxCombo, ++g.combo);
+  if (g.ammo === 0) reload(g);
   g.lockedId = t.id;
   t.keys = keys;
   const giant = t.kind === 'boss' && g.mode === 'passage';
@@ -373,10 +385,26 @@ export function weakness(g: Game, key: string, rate = missRate(g.keyStats, g.his
   return smoothed({ tries: (a?.tries ?? 0) + (b?.tries ?? 0), misses: (a?.misses ?? 0) + (b?.misses ?? 0) }, rate);
 }
 
+/**
+ * The magazine is empty: the reload takes QUICK_RELOAD and as much again for each miss in it, RELOAD_TIME at most (0.5,
+ * 1, 1.5, 2 s). Emptied without a miss, it scores a bonus and the next magazine holds BIG_MAGAZINE rounds.
+ */
+function reload(g: Game) {
+  const clean = g.magMisses === 0;
+  g.reloadLen = Math.min(RELOAD_TIME, QUICK_RELOAD * (1 + g.magMisses));
+  g.reloadUntil = g.time + g.reloadLen;
+  g.magazine = clean ? BIG_MAGAZINE : MAGAZINE;
+  g.magMisses = 0;
+  if (!clean) return;
+  g.bonus = Math.round(NO_MISS_BONUS * multiplier(g.combo));
+  g.bonusAt = g.time;
+  g.score += g.bonus;
+}
+
 export function update(g: Game, dt: number, rand: () => number = Math.random): void {
   if (g.over) return;
   g.time += dt;
-  if (g.ammo === 0 && g.time >= g.reloadUntil) g.ammo = MAGAZINE;
+  if (g.ammo === 0 && g.time >= g.reloadUntil) g.ammo = g.magazine;
   if (g.mode === 'attack' || g.mode === 'practice') busy(g, rand);
   else waves(g, rand);
   if (g.over) return;

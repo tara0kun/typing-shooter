@@ -6,7 +6,7 @@ import {
 import { fromTop, music, musicOn, toggleMusic } from './music.ts';
 import { muted, play, toggleMute, unlock } from './sound.ts';
 import {
-  ATTACK_TIME, FALL_TIME, FIELD_W, LETTER_W, MAGAZINE, MAX_HP, PLAYER_X, PRACTICE_WORDS, RELOAD_TIME, WAVES,
+  ATTACK_TIME, BIG_MAGAZINE, FALL_TIME, FIELD_W, LETTER_W, MAGAZINE, MAX_HP, PLAYER_X, PRACTICE_WORDS, WAVES,
   CATEGORIES, accuracy, difficulty, grade, guide, hurtOf, labelText, labelWidth, level, multiplier, newGame, passages, target, typeKey, update,
   weakKeys, wpm, type Category, type Game, type KeyStats, type Kind, type Lang, type Mode, type Spelling, type Zombie,
 } from './game.ts';
@@ -17,6 +17,7 @@ const PLAYER_LEFT = 10;
 const MUZZLE = { x: PLAYER_LEFT + MUZZLE_AT.x, y: GROUND_Y - PLAYER.height + MUZZLE_AT.y };
 const HURT_TIME = 0.5; // the red edge fades over this long, and does not come back sooner (2 a second at most)
 const NOTE_TIME = 6; // the notes on new kinds stay this long after the wave's break, at the foot of the screen
+const BONUS_TIME = 1.5; // the no-miss bonus stays this long next to the rounds (the quick reload is only 0.5 s)
 const TITLE = 'ナイトタイピスト'; // provisional name, the real one is not decided yet
 const MONO = 'Consolas, "Courier New", monospace';
 const SANS = '"Yu Gothic UI", Meiryo, sans-serif';
@@ -502,8 +503,9 @@ function drawHud() {
   ctx.fillText(stage(), W - 10, 9);
   ctx.textAlign = 'left';
   if (game.ammo > 0) {
-    for (let i = 0; i < MAGAZINE; i++) {
-      ctx.fillStyle = i < game.ammo ? '#e8d27a' : '#3a3528'; // rounds left bright, spent ones dark
+    for (let i = 0; i < game.magazine; i++) {
+      // rounds left bright (the 10 more a magazine without a miss earned in blue, spent first), spent ones dark
+      ctx.fillStyle = i >= game.ammo ? '#3a3528' : i >= MAGAZINE ? '#8fd0ff' : '#e8d27a';
       ctx.fillRect(10 + i * 4, 28, 2, 8);
     }
   } else {
@@ -511,7 +513,12 @@ function drawHud() {
     ctx.fillStyle = '#3a3528';
     ctx.fillRect(56, 29, 56, 6); // the track, so the end of the reload can be seen
     ctx.fillStyle = '#ddd';
-    ctx.fillRect(56, 29, 56 * (1 - (game.reloadUntil - game.time) / RELOAD_TIME), 6); // fills over the 2 seconds
+    ctx.fillRect(56, 29, 56 * (1 - (game.reloadUntil - game.time) / game.reloadLen), 6); // fills over the reload
+  }
+  // only in play: on the results the clock has stopped, and the line would stay under their title
+  if (screen === 'play' && game.time - game.bonusAt < BONUS_TIME) {
+    ctx.fillStyle = '#fd3';
+    ctx.fillText(`ノーミス！ +${game.bonus}・次は ${BIG_MAGAZINE} 発`, 180, 26);
   }
 }
 
@@ -524,7 +531,7 @@ function drawTitle() {
   });
   center(`14px ${SANS}`, '#fd3', `L　言葉: ${lang === 'en' ? '英語' : '日本語（ローマ字で打つ）'}　　${soundLine()}`, 202);
   center(`14px ${SANS}`, '#fd3', `C　お題: ${CATEGORY_NAMES[category]}（${CATEGORY_NOTES[category][lang]}）`, 224);
-  center(`13px ${SANS}`, '#bbb', '↑ ↓ で選んで Enter。ゾンビの頭の上の言葉を打って倒す（1 文字 = 1 発・30 発ごとに 2 秒のリロード）', 256);
+  center(`13px ${SANS}`, '#bbb', '↑ ↓ で選んで Enter。ゾンビの言葉を打って倒す（1 文字 = 1 発・ミスが少ないと装填が速い）', 256);
   center(`13px ${SANS}`, '#bbb', '左の柵まで来られると体力が減る。0 でゲームオーバー。Esc で一時停止', 276);
   center(`12px ${SANS}`, '#999', '※ キーボードが必要です（半角英字で打ってください）', 300);
 }
